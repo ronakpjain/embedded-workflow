@@ -1,103 +1,51 @@
-import os
 import json
+import os
 
 
-def get_workspace_root():
-    """Returns the root directory of the workspace."""
-    return os.getcwd()
+def generate_files(launch_json_path, output_directory):
+    # Ensure the output directory exists
+    os.makedirs(output_directory, exist_ok=True)
 
-
-def get_launch_json_path(workspace_root):
-    """Returns the path to the launch.json file."""
-    vscode_dir = os.path.join(workspace_root, ".vscode")
-    return os.path.join(vscode_dir, "launch.json")
-
-
-def read_launch_json(launch_json_path):
-    """Reads and returns the parsed JSON data from the launch.json file."""
-    if not os.path.exists(launch_json_path):
-        raise FileNotFoundError(f"Error: launch.json not found at {launch_json_path}")
-
+    # Load the JSON data
     with open(launch_json_path, "r") as file:
-        return json.load(file)
+        launch_config = json.load(file)
 
-
-def create_output_directory(workspace_root):
-    """Creates the output directory for the scripts."""
-    output_dir = os.path.join(workspace_root, "debug-scripts")
-    os.makedirs(output_dir, exist_ok=True)
-    return output_dir
-
-
-def generate_script_content(config, workspace_root):
-    """Generates the content for a debug script based on the configuration."""
-    name = config.get("name")
-    program = config.get("program")
-    args = config.get("args", [])
-    gdb_path = config.get("miDebuggerPath")
-
-    # Resolve ${workspaceFolder} in the program path
-    if "${workspaceFolder}" in program:
-        program = program.replace("${workspaceFolder}", workspace_root)
-
-    arguments = " ".join(args)
-    script_content = f"""#!/bin/bash
-# Debug script for {name}
-
-{gdb_path} \\
-    --eval-command="target remote :3333" \\
-    --eval-command="file {program}" \\
-    {arguments}
-"""
-    return script_content
-
-
-def save_script(script_name, script_content, output_dir):
-    """Saves the generated script to the specified directory."""
-    script_path = os.path.join(output_dir, script_name)
-    with open(script_path, "w") as script_file:
-        script_file.write(script_content)
-
-    # Make the script executable
-    os.chmod(script_path, 0o755)
-
-
-def generate_debug_scripts():
-    """Generates debug scripts based on the configurations in launch.json."""
-    workspace_root = get_workspace_root()
-    launch_json_path = get_launch_json_path(workspace_root)
-
-    try:
-        launch_data = read_launch_json(launch_json_path)
-    except FileNotFoundError as e:
-        print(e)
-        return
-
-    configurations = launch_data.get("configurations", [])
-    if not configurations:
-        print("Error: No configurations found in launch.json")
-        return
-
-    output_dir = create_output_directory(workspace_root)
-
-    for config in configurations:
+    # Parse each configuration
+    for config in launch_config.get("configurations", []):
         name = config.get("name")
-        script_name = f"{name.replace(' ', '_')}.sh"
+        if not name:
+            continue  # Skip configurations without a name
 
-        # Generate the content for the script
-        script_content = generate_script_content(config, workspace_root)
+        # Create OpenOCD single command shell script
+        openocd_commands = ["#!/bin/bash"]
+        config_files = " ".join(
+            [f"-f {cfg_file}" for cfg_file in config.get("configFiles", [])]
+        )
+        openocd_command = f'openocd {config_files} -c "target create $_TARGETNAME cortex_m -endian little -rtos auto"'
+        openocd_commands.append(openocd_command)
 
-        # Save the script and make it executable
-        save_script(script_name, script_content, output_dir)
+        openocd_filename = os.path.join(output_directory, f"{name}_openocd.sh")
+        with open(openocd_filename, "w") as openocd_file:
+            openocd_file.write("\n".join(openocd_commands))
+        os.chmod(openocd_filename, 0o755)  # Make the file executable
 
-    print(f"Debug scripts generated in {output_dir}")
+        # Create GDB command shell script
+        gdb_commands = ["#!/bin/bash"]
+        executable = config.get("executable")
+        gdb_commands.append(
+            f"arm-none-eabi-gdb {os.path.join(executable)} -ex 'target extended-remote :3333' -ex 'load' "
+        )
+
+        gdb_filename = os.path.join(output_directory, f"{name}_gdb.sh")
+        with open(gdb_filename, "w") as gdb_file:
+            gdb_file.write("\n".join(gdb_commands))
+        os.chmod(gdb_filename, 0o755)  # Make the file executable
+
+    print(f"Command scripts generated in {output_directory}")
 
 
-def main():
-    """Main entry point for the script."""
-    print("Starting to generate debug scripts...")
-    generate_debug_scripts()
+# Specify the path to the launch.json file and output directory
+launch_json_path = ".vscode/launch.json"
+output_directory = "scripts"
 
-
-if __name__ == "__main__":
-    main()
+generate_files(launch_json_path, output_directory)
